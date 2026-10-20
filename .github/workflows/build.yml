@@ -1,0 +1,69 @@
+name: Test and build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.11"
+            bpy: "4.2.0"
+            numpy: "numpy<2"
+          - python: "3.13"
+            bpy: "5.2.2"
+            numpy: "numpy"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Blender as a Python module
+        run: |
+          sudo apt-get update && sudo apt-get install -y libxi6 libxkbcommon0 libsm6 libxrender1 libgl1
+          pip install "bpy==${{ matrix.bpy }}" "${{ matrix.numpy }}" pytest
+      - name: Run tests
+        run: pytest tests -q
+
+  windows-exe:
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the launcher imports
+        run: python -c "import sys; sys.path.insert(0, 'launcher'); import VroidKassandra, finders; print(finders.find_blender(check_version=False))"
+      - name: Launcher tests
+        run: |
+          pip install pytest pyinstaller==6.11.1
+          pytest tests/test_launcher.py -q
+      - name: Build VroidKassandra.exe
+        run: pyinstaller --noconfirm --onefile --windowed --name VroidKassandra --paths launcher --add-data "converter;converter" launcher/VroidKassandra.py
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item dist/VroidKassandra.exe release/
+          Copy-Item README.md release/
+          Copy-Item "Convert VRoid.bat" release/
+          Copy-Item -Recurse converter release/converter
+          Get-ChildItem release -Recurse -Include __pycache__ | Remove-Item -Recurse -Force
+          Compress-Archive -Path release/* -DestinationPath VroidKassandra-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VroidKassandra-windows
+          path: VroidKassandra-windows.zip
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VroidKassandra-windows.zip
